@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f5f6fa" />
+    <title>Todo List</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="page-header">
+        <p class="eyebrow">YOUR SPACE TO FOCUS</p>
+        <h1>Todo List</h1>
+        <p class="subtitle">Small steps make a big difference.</p>
+      </header>
+
+      <section class="todo-card" aria-labelledby="list-heading">
+        <form id="todo-form" class="todo-form">
+          <label class="visually-hidden" for="todo-input">Add a task</label>
+          <input
+            id="todo-input"
+            name="title"
+            type="text"
+            maxlength="200"
+            placeholder="What needs to get done?"
+            autocomplete="off"
+            required
+          />
+          <button class="add-button" type="submit">
+            <span aria-hidden="true">+</span>
+            <span>Add task</span>
+          </button>
+        </form>
+
+        <div class="list-toolbar">
+          <h2 id="list-heading">Your tasks</h2>
+          <span id="task-count" class="task-count" aria-live="polite">0 tasks</span>
+        </div>
+
+        <div class="task-layout">
+          <div class="filters" role="group" aria-label="Filter tasks">
+            <button class="filter-button is-active" type="button" data-filter="all" aria-pressed="true">All</button>
+            <button class="filter-button" type="button" data-filter="active" aria-pressed="false">Active</button>
+            <button class="filter-button" type="button" data-filter="completed" aria-pressed="false">Completed</button>
+          </div>
+
+          <div class="task-results">
+            <ul id="todo-list" class="todo-list" aria-label="Todo items"></ul>
+            <p id="empty-state" class="empty-state" hidden>
+              <span class="empty-icon" aria-hidden="true">✳</span>
+              <span id="empty-message">Your next win starts here. Add a task!</span>
+            </p>
+          </div>
+        </div>
+        <p id="error-message" class="error-message" role="alert" hidden></p>
+      </section>
+      <footer>One thing at a time. You’ve got this.</footer>
+    </main>
+  </body>
+</html>
