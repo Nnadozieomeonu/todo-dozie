@@ -220,9 +220,11 @@ class TodoRequestHandler(BaseHTTPRequestHandler):
 def main():
     database_path = os.environ.get("TODO_DB_PATH", APP_DIR / "todos.sqlite3")
     store = TodoStore(database_path)
-    server = ThreadingHTTPServer(("127.0.0.1", 8000), TodoRequestHandler)
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", "8000"))
+    server = ThreadingHTTPServer((host, port), TodoRequestHandler)
     server.store = store
-    print("Todo app running at http://127.0.0.1:8000")
+    print(f"Todo app running on {host}:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
