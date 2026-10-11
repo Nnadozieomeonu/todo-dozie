@@ -1,12 +1,10 @@
-import json
-import mimetypes
 import os
 import sqlite3
 from contextlib import contextmanager
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+
+from flask import Flask, jsonify, request, send_file
+from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -93,144 +91,88 @@ class TodoStore:
         return cursor.rowcount > 0
 
 
-class TodoRequestHandler(BaseHTTPRequestHandler):
-    server_version = "TodoApp/1.0"
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
+app.config["TODO_STORE"] = TodoStore(
+    os.environ.get("TODO_DB_PATH", APP_DIR / "todos.sqlite3")
+)
 
-    @property
-    def store(self):
-        return self.server.store
 
-    def do_GET(self):
-        path = unquote(urlsplit(self.path).path)
-        if path == "/api/todos":
-            self._send_json(HTTPStatus.OK, self.store.list_todos())
-            return
+@app.errorhandler(RequestEntityTooLarge)
+def request_too_large(_error):
+    return jsonify(error="Request is too large."), 413
 
-        static_file = STATIC_FILES.get(path)
-        if static_file is None or not static_file.is_file():
-            self.send_error(HTTPStatus.NOT_FOUND)
-            return
 
-        content_type = mimetypes.guess_type(static_file.name)[0] or "application/octet-stream"
-        content = static_file.read_bytes()
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
-        self.send_header("Content-Length", str(len(content)))
-        self.end_headers()
-        self.wfile.write(content)
+@app.get("/")
+def index():
+    return send_file(STATIC_FILES["/"])
 
-    def do_POST(self):
-        if urlsplit(self.path).path != "/api/todos":
-            self.send_error(HTTPStatus.NOT_FOUND)
-            return
 
-        body = self._read_json()
-        if body is None:
-            return
-        title = body.get("title") if isinstance(body, dict) else None
-        if not isinstance(title, str) or not title.strip():
-            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "A todo title is required."})
-            return
-        title = title.strip()
-        if len(title) > MAX_TITLE_LENGTH:
-            self._send_json(
-                HTTPStatus.BAD_REQUEST,
-                {"error": f"Todo titles must be {MAX_TITLE_LENGTH} characters or fewer."},
-            )
-            return
+@app.get("/app.js")
+def javascript():
+    return send_file(STATIC_FILES["/app.js"])
 
-        self._send_json(HTTPStatus.CREATED, self.store.add_todo(title))
 
-    def do_PATCH(self):
-        todo_id = self._todo_id_from_path()
-        if todo_id is None:
-            return
+@app.get("/styles.css")
+def stylesheet():
+    return send_file(STATIC_FILES["/styles.css"])
 
-        body = self._read_json()
-        if body is None:
-            return
-        completed = body.get("completed") if isinstance(body, dict) else None
-        if not isinstance(completed, bool):
-            self._send_json(
-                HTTPStatus.BAD_REQUEST,
-                {"error": "The completed field must be true or false."},
-            )
-            return
 
-        todo = self.store.set_completed(todo_id, completed)
-        if todo is None:
-            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Todo not found."})
-            return
-        self._send_json(HTTPStatus.OK, todo)
+@app.get("/api/todos")
+def list_todos():
+    return jsonify(app.config["TODO_STORE"].list_todos())
 
-    def do_DELETE(self):
-        todo_id = self._todo_id_from_path()
-        if todo_id is None:
-            return
-        if not self.store.delete_todo(todo_id):
-            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Todo not found."})
-            return
-        self.send_response(HTTPStatus.NO_CONTENT)
-        self.end_headers()
 
-    def _todo_id_from_path(self):
-        path = urlsplit(self.path).path
-        prefix = "/api/todos/"
-        if not path.startswith(prefix):
-            self.send_error(HTTPStatus.NOT_FOUND)
-            return None
-        try:
-            todo_id = int(path[len(prefix):])
-        except ValueError:
-            self.send_error(HTTPStatus.NOT_FOUND)
-            return None
-        if todo_id < 1:
-            self.send_error(HTTPStatus.NOT_FOUND)
-            return None
-        return todo_id
+def read_json_body():
+    try:
+        return request.get_json(force=True), None
+    except BadRequest:
+        return None, (jsonify(error="Request body must be valid JSON."), 400)
 
-    def _read_json(self):
-        try:
-            content_length = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid Content-Length."})
-            return None
-        if content_length < 0 or content_length > MAX_REQUEST_BYTES:
-            self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "Request is too large."})
-            return None
-        try:
-            body = json.loads(self.rfile.read(content_length))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Request body must be valid JSON."})
-            return None
-        return body
 
-    def _send_json(self, status, payload):
-        content = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(content)))
-        self.end_headers()
-        self.wfile.write(content)
+@app.post("/api/todos")
+def add_todo():
+    body, error_response = read_json_body()
+    if error_response:
+        return error_response
+    title = body.get("title") if isinstance(body, dict) else None
+    if not isinstance(title, str) or not title.strip():
+        return jsonify(error="A todo title is required."), 400
+    title = title.strip()
+    if len(title) > MAX_TITLE_LENGTH:
+        return jsonify(
+            error=f"Todo titles must be {MAX_TITLE_LENGTH} characters or fewer."
+        ), 400
+    todo = app.config["TODO_STORE"].add_todo(title)
+    return jsonify(todo), 201
 
-    def log_message(self, format_string, *args):
-        print(f"{self.address_string()} - {format_string % args}")
+
+@app.patch("/api/todos/<int:todo_id>")
+def update_todo(todo_id):
+    body, error_response = read_json_body()
+    if error_response:
+        return error_response
+    completed = body.get("completed") if isinstance(body, dict) else None
+    if not isinstance(completed, bool):
+        return jsonify(error="The completed field must be true or false."), 400
+    todo = app.config["TODO_STORE"].set_completed(todo_id, completed)
+    if todo is None:
+        return jsonify(error="Todo not found."), 404
+    return jsonify(todo)
+
+
+@app.delete("/api/todos/<int:todo_id>")
+def delete_todo(todo_id):
+    if not app.config["TODO_STORE"].delete_todo(todo_id):
+        return jsonify(error="Todo not found."), 404
+    return "", 204
 
 
 def main():
-    database_path = os.environ.get("TODO_DB_PATH", APP_DIR / "todos.sqlite3")
-    store = TodoStore(database_path)
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", "8000"))
-    server = ThreadingHTTPServer((host, port), TodoRequestHandler)
-    server.store = store
     print(f"Todo app running on {host}:{port}")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nShutting down todo app.")
-    finally:
-        server.server_close()
+    app.run(host=host, port=port)
 
 
 if __name__ == "__main__":

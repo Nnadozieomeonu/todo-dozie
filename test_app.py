@@ -1,12 +1,9 @@
 import json
 import tempfile
-import threading
 import unittest
-from http.client import HTTPConnection
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from app import TodoRequestHandler, TodoStore
+from app import app, TodoStore
 
 
 class TodoAppTests(unittest.TestCase):
@@ -14,26 +11,22 @@ class TodoAppTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.database_path = Path(self.temp_dir.name) / "test.sqlite3"
         self.store = TodoStore(self.database_path)
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), TodoRequestHandler)
-        self.server.store = self.store
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-        self.connection = HTTPConnection("127.0.0.1", self.server.server_port)
+        self.previous_store = app.config["TODO_STORE"]
+        app.config["TODO_STORE"] = self.store
+        self.client = app.test_client()
 
     def tearDown(self):
-        self.connection.close()
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join()
+        app.config["TODO_STORE"] = self.previous_store
         self.temp_dir.cleanup()
 
     def request_json(self, method, path, payload=None):
-        body = json.dumps(payload) if payload is not None else None
-        headers = {"Content-Type": "application/json"} if body is not None else {}
-        self.connection.request(method, path, body=body, headers=headers)
-        response = self.connection.getresponse()
-        content = response.read()
-        return response.status, json.loads(content) if content else None
+        response = self.client.open(
+            path,
+            method=method,
+            data=json.dumps(payload) if payload is not None else None,
+            content_type="application/json" if payload is not None else None,
+        )
+        return response.status_code, response.get_json(silent=True)
 
     def test_add_complete_and_delete_todo(self):
         status, todo = self.request_json("POST", "/api/todos", {"title": "  Write tests  "})
@@ -82,12 +75,18 @@ class TodoAppTests(unittest.TestCase):
             ("/styles.css", "text/css"),
         ):
             with self.subTest(path=path):
-                self.connection.request("GET", path)
-                response = self.connection.getresponse()
-                content = response.read()
-                self.assertEqual(response.status, 200)
-                self.assertIn(expected_content_type, response.getheader("Content-Type"))
-                self.assertTrue(content)
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(expected_content_type, response.content_type)
+                self.assertTrue(response.data)
+                response.close()
+
+    def test_invalid_json_returns_json_error(self):
+        response = self.client.post(
+            "/api/todos", data="{", content_type="application/json"
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "Request body must be valid JSON.")
 
 
 if __name__ == "__main__":
